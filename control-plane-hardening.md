@@ -94,7 +94,7 @@ Same applies for SSH:
 
 ---
 
-### **Download kubectl (official method):**
+### **Download kubectl (official method):** (CMD - C:\Users\Syedibrahim\Downloads)
 
 ```cmd
 curl.exe -LO "https://dl.k8s.io/release/v1.34.0/bin/windows/amd64/kubectl.exe"
@@ -196,5 +196,4 @@ connectex: A connection attempt failed because the connected party did not prope
 * Random laptops in same LAN **cannot** access the cluster API or SSH when restricted.
 
 ---
-
 
