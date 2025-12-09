@@ -11,7 +11,7 @@
 
 ---
 
-# **1. Control Plane Hardening Using UFW**
+# **1. Control Plane Hardening Using UFW (Uncomplicated Firewall)**
 
 ### **Commands (Run on Control Plane Node):**
 
