@@ -347,7 +347,7 @@ master2-pod   Running
 
 ---
 
-### Final Outcome Snaphots
+### Final Outcome Snapshots
 
 ![Alt text](master-1.png)
 
