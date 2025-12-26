@@ -154,6 +154,13 @@ mc alias set myminio http://192.168.30.107:9000 minioadmin minioadmin
 mc ls myminio
 ```
 
+### **Install Necessary tools for the scripts**
+
+```bash
+sudo apt install curl -y
+```
+
+
 ---
 
 ## **Phase 4: SSH Configuration (master-2 → worker-1)**
@@ -324,8 +331,8 @@ sudo systemctl restart containerd
 sudo systemctl start kubelet
 EOF
 
-log "Waiting 3-4 minutes before joining worker $WORKER"
-sleep 240
+log "Waiting 1-3 minutes before joining worker $WORKER"
+sleep 180
 
   log "Rejoining worker node: $WORKER"
   ssh kube@$WORKER "sudo ${JOIN_CMD}"
@@ -339,6 +346,11 @@ kubectl get nodes
 kubectl get pods -A
 ```
 
+### **Make Script Executable**
+
+```bash
+chmod +x /home/kube/restore/dr_restore.sh
+```
 
 ---
 
@@ -378,7 +390,7 @@ MASTER_IP="192.168.30.200"
 DR_SCRIPT="/home/kube/restore/dr_restore.sh"
 
 CHECK_INTERVAL=1
-FAIL_WINDOW=$((1 * 60))   # 5 minutes (300 seconds)
+FAIL_WINDOW=$((5 * 60))   # 5 minutes (300 seconds)
 
 LOG_FILE="/var/log/master-monitor.log"
 DR_LOCK="/var/run/dr_executed.lock"
@@ -508,6 +520,15 @@ sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 sudo systemctl enable master-monitor
 sudo systemctl start master-monitor
+```
+---
+
+### **Make the necessary steps to run the monitoring script**
+
+```bash
+sudo touch /var/log/master-monitor.log
+sudo chown kube:kube /var/log/master-monitor.log
+sudo chmod 664 /var/log/master-monitor.log
 ```
 
 ---
