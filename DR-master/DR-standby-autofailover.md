@@ -26,6 +26,8 @@
   * New pods can be created
   * CNI (Calico) works **without re-applying manifests**
 
+---
+
 ## **Objective**
 
 To implement a **fully automated cold-standby disaster recovery solution** for Kubernetes where:
