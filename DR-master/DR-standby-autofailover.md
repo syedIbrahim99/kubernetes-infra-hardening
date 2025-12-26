@@ -189,8 +189,22 @@ networking:
 ```
 
 ---
+## **Phase 6: Master Node Sudo Configuration**
 
-## **Phase 6: Worker Node Sudo Configuration**
+### **Node:** `master-1 (192.168.30.202)`
+
+```bash
+sudo visudo
+```
+Add:
+
+```text
+kube ALL=(ALL) NOPASSWD:ALL
+```
+
+---
+
+## **Phase 7: Worker Node Sudo Configuration**
 
 ### **Node:** `worker-1 (192.168.30.201)`
 
@@ -207,7 +221,7 @@ Defaults:kube !requiretty
 
 ---
 
-## **Phase 7: Disaster Recovery Restore Script (master-2)**
+## **Phase 8: Disaster Recovery Restore Script (master-2)**
 
 📌 *This script restores ETCD, initializes control-plane, and rejoins workers.*
 
@@ -326,12 +340,9 @@ kubectl get pods -A
 ```
 
 
-
-
-
 ---
 
-# **Phase 8: FULL AUTOMATION – Standby Monitoring & Auto Failover**
+# **Phase 9: FULL AUTOMATION – Standby Monitoring & Auto Failover**
 
 ## **Standby with Monitor Script**
 
@@ -341,7 +352,7 @@ This component ensures **automatic disaster recovery** without manual interventi
 
 ---
 
-## **8.1 Create Monitoring Script**
+## **9.1 Create Monitoring Script**
 
 ```bash
 nano /home/kube/monitor_master.sh
@@ -351,13 +362,13 @@ nano /home/kube/monitor_master.sh
 
 ```bash
 #!/bin/bash
+set -o pipefail
 
-# =========================
-# Master-1 Monitor Script
-# Systemd-friendly version
-# =========================
+# =========================================================
+# Kubernetes Master-1 Monitor & DR Trigger (Cold Standby)
+# =========================================================
 
-# Add standard paths for systemd
+# System paths for systemd
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # ------------------------------
@@ -365,12 +376,14 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # ------------------------------
 MASTER_IP="192.168.30.200"
 DR_SCRIPT="/home/kube/restore/dr_restore.sh"
-CHECK_INTERVAL=20     # seconds between checks
-FAIL_LIMIT=10         # consecutive failures to trigger DR
-FAIL_WINDOW=300       # 5 minutes window in seconds
-LOG_FILE="/var/log/master-monitor.log"
 
-# Absolute paths for commands
+CHECK_INTERVAL=1
+FAIL_WINDOW=$((1 * 60))   # 5 minutes (300 seconds)
+
+LOG_FILE="/var/log/master-monitor.log"
+DR_LOCK="/var/run/dr_executed.lock"
+
+# Absolute command paths
 CURL=/usr/bin/curl
 PING=/bin/ping
 SUDO=/usr/bin/sudo
@@ -380,69 +393,78 @@ TEE=/usr/bin/tee
 # ------------------------------
 # VARIABLES
 # ------------------------------
-api_fail_count=0
-host_fail_count=0
+api_failed=false
+host_failed=false
 first_fail_time=0
 
-# Ensure log file exists
-touch $LOG_FILE
-$DATE +"%F %T [INFO] Master monitor started" | $TEE -a $LOG_FILE
+# ------------------------------
+# INIT
+# ------------------------------
+touch "$LOG_FILE"
+$DATE +"%F %T [INFO] Master monitor started" | $TEE -a "$LOG_FILE"
 
 # ------------------------------
 # MONITOR LOOP
 # ------------------------------
 while true; do
 
-  # --- Check API Server ---
-  $CURL -k --max-time 3 https://$MASTER_IP:6443/healthz >/dev/null 2>&1
-  if [ $? -ne 0 ]; then
-    api_fail_count=$((api_fail_count + 1))
-    $DATE +"%F %T [WARN] API FAIL ($api_fail_count/$FAIL_LIMIT)" | $TEE -a $LOG_FILE
+  # ---- Exit if DR already executed ----
+  if [ -f "$DR_LOCK" ]; then
+    $DATE +"%F %T [INFO] DR already executed. Exiting monitor." | $TEE -a "$LOG_FILE"
+    exit 0
+  fi
+
+  # ---- API Check ----
+  if ! $CURL -k --max-time 3 https://$MASTER_IP:6443/healthz >/dev/null 2>&1; then
+    api_failed=true
+    $DATE +"%F %T [WARN] API FAIL" | $TEE -a "$LOG_FILE"
   else
-    api_fail_count=0
+    api_failed=false
   fi
 
-  # --- Check Machine Reachability ---
-  $PING -c 1 -W 2 $MASTER_IP >/dev/null 2>&1
-  if [ $? -ne 0 ]; then
-    host_fail_count=$((host_fail_count + 1))
-    $DATE +"%F %T [WARN] MACHINE FAIL ($host_fail_count/$FAIL_LIMIT)" | $TEE -a $LOG_FILE
+  # ---- Host Check ----
+  if ! $PING -c 1 -W 2 $MASTER_IP >/dev/null 2>&1; then
+    host_failed=true
+    $DATE +"%F %T [WARN] MACHINE FAIL" | $TEE -a "$LOG_FILE"
   else
-    host_fail_count=0
+    host_failed=false
   fi
 
-  # --- Start timer on first failure ---
-  if [ $api_fail_count -eq 1 ] || [ $host_fail_count -eq 1 ]; then
-    first_fail_time=$(date +%s)
-  fi
-
-  # --- Check if DR should be triggered ---
-  now=$(date +%s)
-  elapsed=$(( now - first_fail_time ))
-
-  if [ $api_fail_count -ge $FAIL_LIMIT ] && [ $host_fail_count -ge $FAIL_LIMIT ] && [ $elapsed -le $FAIL_WINDOW ]; then
-    $DATE +"%F %T [ERROR] MASTER DEAD! Initiating DR..." | $TEE -a $LOG_FILE
-    if [ -x "$DR_SCRIPT" ]; then
-      $SUDO $DR_SCRIPT | $TEE -a $LOG_FILE
-      $DATE +"%F %T [INFO] DR script completed. Continuing monitoring..." | $TEE -a $LOG_FILE
-    else
-      $DATE +"%F %T [ERROR] DR script not found or not executable!" | $TEE -a $LOG_FILE
+  # ---- Start timer on first combined failure ----
+  if $api_failed && $host_failed; then
+    if [ "$first_fail_time" -eq 0 ]; then
+      first_fail_time=$(date +%s)
+      $DATE +"%F %T [INFO] Failure window started" | $TEE -a "$LOG_FILE"
     fi
-    # Reset fail counters and timer after DR
-    api_fail_count=0
-    host_fail_count=0
+  else
     first_fail_time=0
   fi
 
-  # --- Reset timer if elapsed > window ---
-  if [ $elapsed -gt $FAIL_WINDOW ]; then
-    api_fail_count=0
-    host_fail_count=0
-    first_fail_time=0
-    $DATE +"%F %T [INFO] Failure window expired, counters reset" | $TEE -a $LOG_FILE
+  # ---- Trigger DR if window exceeded ----
+  if [ "$first_fail_time" -ne 0 ]; then
+    now=$(date +%s)
+    elapsed=$(( now - first_fail_time ))
+
+    if [ "$elapsed" -ge "$FAIL_WINDOW" ]; then
+      $DATE +"%F %T [ERROR] MASTER DEAD > 5 minutes. Initiating DR!" | $TEE -a "$LOG_FILE"
+
+      if [ -x "$DR_SCRIPT" ]; then
+        if sudo -u kube "$DR_SCRIPT" 2>&1 | $TEE -a "$LOG_FILE"; then
+          touch "$DR_LOCK"
+          $DATE +"%F %T [INFO] DR executed successfully. Lock created." | $TEE -a "$LOG_FILE"
+          $DATE +"%F %T [INFO] Monitoring stopped." | $TEE -a "$LOG_FILE"
+          exit 0
+        else
+          $DATE +"%F %T [ERROR] DR FAILED. Lock NOT created." | $TEE -a "$LOG_FILE"
+          first_fail_time=0
+        fi
+      else
+        $DATE +"%F %T [ERROR] DR script not executable!" | $TEE -a "$LOG_FILE"
+      fi
+    fi
   fi
 
-  sleep $CHECK_INTERVAL
+  sleep "$CHECK_INTERVAL"
 done
 
 ```
@@ -457,7 +479,7 @@ chmod +x /home/kube/monitor_master.sh
 
 ---
 
-## **8.2 Systemd Service Configuration**
+## **9.2 Systemd Service Configuration**
 
 ```bash
 sudo nano /etc/systemd/system/master-monitor.service
@@ -557,4 +579,3 @@ tail -f /var/log/master-monitor.log
 ✅ Zero manual intervention
 
 ---
-
