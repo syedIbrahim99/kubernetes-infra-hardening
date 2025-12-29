@@ -198,7 +198,7 @@ networking:
 ---
 ## **Phase 6: Master Node Sudo Configuration**
 
-### **Node:** `master-1 (192.168.30.202)`
+### **Node:** `master-2 (192.168.30.202)`
 
 ```bash
 sudo visudo
