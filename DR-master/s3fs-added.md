@@ -174,6 +174,162 @@ s3fs dr-bucket /home/kube/etcd-dir \
 
 ✅ ETCD snapshots stored in `/home/kube/etcd-dir` are now **directly written to MinIO**
 
+---
+
+## 5A. Automated ETCD Backup Using Python (Primary Master)
+
+📌 *This phase adds scheduled, automatic ETCD snapshots on the primary master (`master-1`) to ensure continuous state protection before any disaster occurs.*
+
+---
+
+### **Node:** `master-1 (192.168.30.200)`
+
+---
+
+## **Objective**
+
+To automate **ETCD snapshot backups** using a **Python script**, ensuring that:
+
+* ETCD snapshots are taken **every minute**
+* Snapshots are stored in the **MinIO-mounted directory**
+* No manual intervention is required
+* The latest snapshot is always available for DR restore
+
+---
+
+## **Directory Structure**
+
+```text
+/home/kube/
+├── script-etcd/
+│   └── etcd.py
+└── etcd-dir/           # Mounted MinIO bucket (dr-bucket)
+```
+
+---
+
+## **Step 1: Create Script Directory**
+
+```bash
+cd /home/kube
+mkdir script-etcd
+cd script-etcd
+```
+
+---
+
+## **Step 2: Create ETCD Backup Python Script**
+
+### **File:** `/home/kube/script-etcd/etcd.py`
+
+```python
+#!/usr/bin/env python3
+
+import subprocess
+import os
+from datetime import datetime
+
+# Directory to store snapshots
+backup_dir = "/home/kube/etcd-dir"
+backup_file = "myback.db"
+backup_path = os.path.join(backup_dir, backup_file)
+
+# Ensure directory exists
+os.makedirs(backup_dir, exist_ok=True)
+
+# ETCDCTL command
+etcdctl_cmd = [
+    "etcdctl",
+    "snapshot",
+    "save",
+    backup_path,
+    "--cacert=/etc/kubernetes/pki/etcd/ca.crt",
+    "--cert=/etc/kubernetes/pki/etcd/server.crt",
+    "--key=/etc/kubernetes/pki/etcd/server.key"
+]
+
+# Set ETCDCTL_API environment variable
+env = os.environ.copy()
+env["ETCDCTL_API"] = "3"
+
+# Execute command
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+try:
+    result = subprocess.run(
+        etcdctl_cmd,
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env
+    )
+    print(f"[{timestamp}] Snapshot saved successfully at: {backup_path}")
+except subprocess.CalledProcessError as e:
+    print(f"[{timestamp}] ERROR: Snapshot failed\n{e.stderr}")
+```
+
+---
+
+## **Step 3: Secure Script Permissions**
+
+```bash
+chmod 700 /home/kube/script-etcd/etcd.py
+```
+
+---
+
+## **Step 4: Verify Python Availability**
+
+```bash
+python3 --version
+```
+
+📌 *Ensure Python 3 is installed before proceeding.*
+
+---
+
+## **Step 5: Create Snapshot Directory (If Not Exists)**
+
+```bash
+mkdir -p /home/kube/etcd-dir
+cd /home/kube/etcd-dir
+```
+
+*(Note: Actual snapshots are written to `/home/kube/etcd-dir`, which is MinIO-mounted)*
+
+---
+
+## **Step 6: Configure Cron Job (Root Privileges Required)**
+
+ETCD snapshot requires access to Kubernetes PKI files, so **root cron** is used.
+
+```bash
+sudo crontab -e
+```
+
+Add the following line:
+
+```cron
+*/1 * * * * /usr/bin/python3 /home/kube/script-etcd/etcd.py
+```
+
+📌 This runs the snapshot **every 1 minute**.
+
+---
+
+## **Step 7: Verify Cron Job**
+
+```bash
+sudo crontab -l
+```
+
+Expected Output:
+
+```text
+*/1 * * * * /usr/bin/python3 /home/kube/script-etcd/etcd.py
+```
+
+---
+
 ## **Phase 2: Standby Master Preparation (master-2)**
 
 ### **Node:** `master-2 (192.168.30.202)`
