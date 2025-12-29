@@ -380,7 +380,6 @@ set -o pipefail
 # Kubernetes Master-1 Monitor & DR Trigger (Cold Standby)
 # =========================================================
 
-# System paths for systemd
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # ------------------------------
@@ -390,15 +389,14 @@ MASTER_IP="192.168.30.200"
 DR_SCRIPT="/home/kube/restore/dr_restore.sh"
 
 CHECK_INTERVAL=1
-FAIL_WINDOW=$((5 * 60))   # 5 minutes (300 seconds)
+FAIL_WINDOW=$((5 * 60))   # 5 minutes
 
 LOG_FILE="/var/log/master-monitor.log"
-DR_LOCK="/var/run/dr_executed.lock"
+DR_LOCK="/home/kube/dr_executed.lock"
 
 # Absolute command paths
 CURL=/usr/bin/curl
 PING=/bin/ping
-SUDO=/usr/bin/sudo
 DATE=/bin/date
 TEE=/usr/bin/tee
 
@@ -420,13 +418,18 @@ $DATE +"%F %T [INFO] Master monitor started" | $TEE -a "$LOG_FILE"
 # ------------------------------
 while true; do
 
-  # ---- Exit if DR already executed ----
+  # -------------------------------------------------
+  # If DR already executed → DO NOTHING, KEEP ALIVE
+  # -------------------------------------------------
   if [ -f "$DR_LOCK" ]; then
-    $DATE +"%F %T [INFO] DR already executed. Exiting monitor." | $TEE -a "$LOG_FILE"
-    exit 0
+    $DATE +"%F %T [INFO] DR already executed. Monitoring paused." | $TEE -a "$LOG_FILE"
+    sleep "$CHECK_INTERVAL"
+    continue
   fi
 
-  # ---- API Check ----
+  # ------------------------------
+  # API CHECK
+  # ------------------------------
   if ! $CURL -k --max-time 3 https://$MASTER_IP:6443/healthz >/dev/null 2>&1; then
     api_failed=true
     $DATE +"%F %T [WARN] API FAIL" | $TEE -a "$LOG_FILE"
@@ -434,7 +437,9 @@ while true; do
     api_failed=false
   fi
 
-  # ---- Host Check ----
+  # ------------------------------
+  # HOST CHECK
+  # ------------------------------
   if ! $PING -c 1 -W 2 $MASTER_IP >/dev/null 2>&1; then
     host_failed=true
     $DATE +"%F %T [WARN] MACHINE FAIL" | $TEE -a "$LOG_FILE"
@@ -442,7 +447,9 @@ while true; do
     host_failed=false
   fi
 
-  # ---- Start timer on first combined failure ----
+  # ------------------------------
+  # FAILURE WINDOW
+  # ------------------------------
   if $api_failed && $host_failed; then
     if [ "$first_fail_time" -eq 0 ]; then
       first_fail_time=$(date +%s)
@@ -452,7 +459,9 @@ while true; do
     first_fail_time=0
   fi
 
-  # ---- Trigger DR if window exceeded ----
+  # ------------------------------
+  # TRIGGER DR
+  # ------------------------------
   if [ "$first_fail_time" -ne 0 ]; then
     now=$(date +%s)
     elapsed=$(( now - first_fail_time ))
@@ -460,15 +469,17 @@ while true; do
     if [ "$elapsed" -ge "$FAIL_WINDOW" ]; then
       $DATE +"%F %T [ERROR] MASTER DEAD > 5 minutes. Initiating DR!" | $TEE -a "$LOG_FILE"
 
+      # 🔒 LOCK FIRST (prevents retries)
+      touch "$DR_LOCK"
+
       if [ -x "$DR_SCRIPT" ]; then
-        if sudo -u kube "$DR_SCRIPT" 2>&1 | $TEE -a "$LOG_FILE"; then
-          touch "$DR_LOCK"
-          $DATE +"%F %T [INFO] DR executed successfully. Lock created." | $TEE -a "$LOG_FILE"
-          $DATE +"%F %T [INFO] Monitoring stopped." | $TEE -a "$LOG_FILE"
-          exit 0
+        bash "$DR_SCRIPT" 2>&1 | $TEE -a "$LOG_FILE"
+        DR_EXIT_CODE=${PIPESTATUS[0]}
+
+        if [ "$DR_EXIT_CODE" -eq 0 ]; then
+          $DATE +"%F %T [INFO] DR completed successfully. Monitoring paused." | $TEE -a "$LOG_FILE"
         else
-          $DATE +"%F %T [ERROR] DR FAILED. Lock NOT created." | $TEE -a "$LOG_FILE"
-          first_fail_time=0
+          $DATE +"%F %T [ERROR] DR FAILED after lock. Manual intervention required." | $TEE -a "$LOG_FILE"
         fi
       else
         $DATE +"%F %T [ERROR] DR script not executable!" | $TEE -a "$LOG_FILE"
