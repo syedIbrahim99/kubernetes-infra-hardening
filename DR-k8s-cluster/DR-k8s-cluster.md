@@ -455,4 +455,17 @@ avoids these conflicts because it is a **dedicated private subnet for pod networ
 
 ---
 
+# 16. Snapshot Restore Outcome (Screenshots)
+
+The following screenshots show the final state of the restored cluster.
+
+### Nodes After Restore
+
+Screenshot:
+
+![Cluster Nodes After Restore](image-1.png)
+
+![Cluster Nodes After Restore](image-2.png)
+
+---
 
